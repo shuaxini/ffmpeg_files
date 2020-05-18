@@ -31,7 +31,9 @@ int main(int argc, char* argv[])
     in_filename = "rtmp://localhost:1935/rtmplive";
     out_filename = "receive.flv";
 
-    av_register_all();
+    //av_register_all is deprecated in ffmpeg 4.0 and later, just omit it
+    //av_register_all();
+
     //init network
     avformat_network_init();
     //input

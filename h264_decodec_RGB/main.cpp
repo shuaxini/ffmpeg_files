@@ -41,8 +41,8 @@ int main(int argc, char* argv[])
 	const char *in_filename = "rtmp://localhost:1935/rtmplive";
 	const char *out_filename = "test.h264";
 
-	//Register
-	av_register_all();
+	//av_register_all is deprecated in ffmpeg 4.0 and later, just omit it
+	//av_register_all();
 
 	//NetWork
 	avformat_network_init();
@@ -62,7 +62,7 @@ int main(int argc, char* argv[])
 	av_dump_format(ifmt_cxt, 0, in_filename, 0);
 
 	for(i=0; i<ifmt_cxt->nb_streams; ++i) {
-		if(ifmt_cxt->streams[i]->codec->codec_type == AVMEDIA_TYPE_VIDEO)
+		if(ifmt_cxt->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO)
 			videoindex = i;
 	}
 
@@ -82,6 +82,23 @@ int main(int argc, char* argv[])
 	if(avcodec_open2(pCodecCtx, pCodec, NULL) < 0) {
 		cerr << "Could not open codec." << endl;
 		return -1;
+	}
+
+	{
+        //get AVCodecContext by AVFormatContext->AVStream->AVCodecParamters->AVCodecID
+        AVCodecContext *pTestCxt;
+		AVCodec        *pTest;
+
+		if(AV_CODEC_ID_H264 == ifmt_cxt->streams[videoindex]->codecpar->codec_id)
+			cout << "codec_id:AV_CODEC_ID_H264" << endl;
+
+		pTest = avcodec_find_decoder(ifmt_cxt->streams[videoindex]->codecpar->codec_id);
+		pTestCxt = avcodec_alloc_context3(pTest);
+		avcodec_parameters_to_context(pTestCxt, ifmt_cxt->streams[videoindex]->codecpar);
+		avcodec_open2(pTestCxt, pTest, NULL);
+
+		if(pTestCxt == ifmt_cxt->streams[videoindex]->codec)
+			cout << "AAAAAAA the same" << endl;
 	}
 
 	pFrame = av_frame_alloc();
