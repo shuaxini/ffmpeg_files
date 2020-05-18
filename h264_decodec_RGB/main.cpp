@@ -37,6 +37,10 @@ int main(int argc, char* argv[])
 	AVCodecContext *pCodecCtx;
 	AVCodec        *pCodec;
 
+	const AVBitStreamFilter *buffersrc = NULL;
+	AVBSFContext *bsf_ctx;
+	AVCodecParameters *codecpar = NULL;
+
 
 	const char *in_filename = "rtmp://localhost:1935/rtmplive";
 	const char *out_filename = "test.h264";
@@ -62,8 +66,10 @@ int main(int argc, char* argv[])
 	av_dump_format(ifmt_cxt, 0, in_filename, 0);
 
 	for(i=0; i<ifmt_cxt->nb_streams; ++i) {
-		if(ifmt_cxt->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO)
+		if(ifmt_cxt->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
 			videoindex = i;
+			codecpar = ifmt_cxt->streams[i]->codecpar;
+		}
 	}
 
 	//Find H.264 Decoder
@@ -84,9 +90,10 @@ int main(int argc, char* argv[])
 		return -1;
 	}
 
+	/*
 	{
-        //get AVCodecContext by AVFormatContext->AVStream->AVCodecParamters->AVCodecID
-        AVCodecContext *pTestCxt;
+		//get AVCodecContext by AVFormatContext->AVStream->AVCodecParamters->AVCodecID
+		AVCodecContext *pTestCxt;
 		AVCodec        *pTest;
 
 		if(AV_CODEC_ID_H264 == ifmt_cxt->streams[videoindex]->codecpar->codec_id)
@@ -96,10 +103,8 @@ int main(int argc, char* argv[])
 		pTestCxt = avcodec_alloc_context3(pTest);
 		avcodec_parameters_to_context(pTestCxt, ifmt_cxt->streams[videoindex]->codecpar);
 		avcodec_open2(pTestCxt, pTest, NULL);
-
-		if(pTestCxt == ifmt_cxt->streams[videoindex]->codec)
-			cout << "AAAAAAA the same" << endl;
 	}
+	*/
 
 	pFrame = av_frame_alloc();
 	if(!pFrame) {
@@ -111,34 +116,55 @@ int main(int argc, char* argv[])
 
 	cv::Mat image_test;
 
-	AVBitStreamFilterContext *h264bsfc = av_bitstream_filter_init("h264_mp4toannexb");
+	//AVBitStreamFilterContext *h264bsfc = av_bitstream_filter_init("h264_mp4toannexb");
+	buffersrc = av_bsf_get_by_name("h264_mp4toannexb");
+	ret = av_bsf_alloc(buffersrc, &bsf_ctx);
+	if(ret < 0) return -1;
+
+	avcodec_parameters_copy(bsf_ctx->par_in, codecpar);
+	ret = av_bsf_init(bsf_ctx);
 
 	while(av_read_frame(ifmt_cxt, &pkt) >= 0) {
 
 		if(pkt.stream_index == videoindex) {
-			av_bitstream_filter_filter(h264bsfc, ifmt_cxt->streams[videoindex]->codec, NULL, 
-										&pkt.data, &pkt.size, pkt.data, pkt.size, 0);
+			//av_bitstream_filter_filter(h264bsfc, ifmt_cxt->streams[videoindex]->codec, NULL,
+			//			&pkt.data, &pkt.size, pkt.data, pkt.size, 0);
 
+			//保存为h.264, 该函数用于测试
+			//fwrite(pkt.data, 1, pkt.size, fp_video);
+
+            ret = av_bsf_send_packet(bsf_ctx, &pkt);
+		    if(ret < 0) {
+				cout << "bsf_send_packet is error " << std::endl;
+				continue;
+			}
+
+			ret = av_bsf_receive_packet(bsf_ctx, &pkt);
+			if(ret < 0) {
+				cout << "bsf_receive_packet is error " << endl;
+				continue;
+			}
 			cout << "Write video packet. size:" << pkt.size << " pts:" << pkt.pts << endl;
 
-			fwrite(pkt.data, 1, pkt.size, fp_video);
+			// Decode AVPacket
+            if(pkt.size)
+            {
+                ret = avcodec_send_packet(pCodecCtx, &pkt);
+                if (ret < 0 || ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
+                    std::cout << "avcodec_send_packet: " << ret << std::endl;
+                    continue;
+                }
 
-			if(pkt.size) {
-				ret = avcodec_send_packet(pCodecCtx, &pkt);
-				if(ret < 0 || ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
-					cout << "avcodec_send_packet: " << ret << std::endl;
-					continue;
-				}
+                //Get AVframe
+                ret = avcodec_receive_frame(pCodecCtx, pFrame);
+                if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
+                    std::cout << "avcodec_receive_frame: " << ret << std::endl;
+                    continue;
+                }
 
-				//get frame
-				ret = avcodec_receive_frame(pCodecCtx, pFrame);
-				if(ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
-					cout << "avcodec_receive_frame: " << ret << endl;
-					continue;
-				}
-
-				AVFrame2Img(pFrame, image_test);
-			}
+                //AVframe to rgb
+                AVFrame2Img(pFrame,image_test);
+            }
 		}
 
 		av_packet_unref(&pkt);
@@ -146,7 +172,9 @@ int main(int argc, char* argv[])
 
 
 	//close filter
-	av_bitstream_filter_close(h264bsfc);
+	//av_bitstream_filter_close(h264bsfc);
+	av_bsf_free(&bsf_ctx);
+
 	fclose(fp_video);
 	avformat_close_input(&ifmt_cxt);
 	if(ret < 0 && ret != AVERROR_EOF) {
